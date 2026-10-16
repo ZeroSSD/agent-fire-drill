@@ -8,5 +8,12 @@ __pycache__/
 *.sqlite*
 *.log
 runs/
+results/
+*.jsonl
+upstream-core/
+scoreboard/data/*.json
+scoreboard/data/*.js
+scoreboard/data/*.tmp
+trace.jsonl
 .DS_Store
 

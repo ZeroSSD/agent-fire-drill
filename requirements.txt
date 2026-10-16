@@ -1,2 +1,5 @@
 daytona==0.224.0
+arize==8.59.1
+arize-otel==0.14.1
+pandas==2.3.3
 
