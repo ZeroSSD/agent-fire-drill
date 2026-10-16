@@ -1,6 +1,7 @@
 """Run a deterministic refund timeout scenario against the local mock service."""
 
 import argparse
+import contextlib
 import json
 import os
 import sqlite3
@@ -44,7 +45,7 @@ def run_scenario(guardrail, workdir, fault="timeout_after_commit", fault_delay=1
                     raise
                 time.sleep(0.2)
 
-        with sqlite3.connect(db_path) as connection:
+        with contextlib.closing(sqlite3.connect(db_path)) as connection:
             refund_count = connection.execute(
                 "SELECT COUNT(*) FROM refunds"
             ).fetchone()[0]
@@ -82,7 +83,7 @@ def _report(guardrail, workdir=None):
         return r
     if workdir:
         return go(workdir)
-    with tempfile.TemporaryDirectory(prefix="firedrill-") as wd:
+    with tempfile.TemporaryDirectory(prefix="firedrill-", ignore_cleanup_errors=True) as wd:
         return go(wd)
 
 

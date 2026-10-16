@@ -62,3 +62,27 @@ class GuardrailSimulationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoLeakedConnectionsTest(unittest.TestCase):
+    """Regression test for a Windows-only failure: an open SQLite file cannot be deleted there (WinError 32)."""
+
+    def test_every_sqlite_connection_is_closed_after_a_run(self):
+        import sqlite3
+        from unittest import mock
+        opened = []
+        real = sqlite3.connect
+
+        def tracking(*a, **k):
+            c = real(*a, **k)
+            opened.append(c)
+            return c
+        with mock.patch("sqlite3.connect", tracking):
+            from firedrill import simulate
+            simulate.run_scenario(False, __import__("tempfile").mkdtemp())
+            import time
+            time.sleep(0.3)
+        self.assertGreater(len(opened), 0)
+        for c in opened:
+            with self.assertRaises(sqlite3.ProgrammingError):
+                c.execute("SELECT 1")      # raises only if the connection is closed

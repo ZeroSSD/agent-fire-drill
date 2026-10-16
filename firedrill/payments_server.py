@@ -5,6 +5,7 @@ commit the refund and then hang for FAULT_DELAY seconds, so the client times out
 even though the refund was processed.
 """
 import argparse
+import contextlib
 import json
 import os
 import sqlite3
@@ -27,13 +28,27 @@ class State:
         self.db_path, self.fault, self.fault_delay = db_path, fault, fault_delay
         self.lock = threading.Lock()
         self.faulted_orders = set()
-        with self.connect() as c:
+        with self.db() as c:
             c.executescript(SCHEMA)
 
     def connect(self):
         c = sqlite3.connect(self.db_path, timeout=10)
         c.row_factory = sqlite3.Row
         return c
+
+    @contextlib.contextmanager
+    def db(self):
+        """Commit on success, roll back on error, and ALWAYS close. On Windows an open SQLite file
+        cannot be deleted, so a leaked connection breaks temp-folder cleanup (WinError 32)."""
+        c = self.connect()
+        try:
+            yield c
+            c.commit()
+        except BaseException:
+            c.rollback()
+            raise
+        finally:
+            c.close()
 
 
 def make_handler(state):
@@ -64,11 +79,11 @@ def make_handler(state):
                 return self._send(200, {"ok": True, "fault": state.fault})
             if self.path.startswith("/refund/"):
                 order = self.path.split("/", 2)[2]
-                with state.connect() as c:
+                with state.db() as c:
                     rows = c.execute("SELECT refund_id, amount, idempotency_key FROM refunds WHERE order_id=? ORDER BY refund_id", (order,)).fetchall()
                 return self._send(200, {"order_id": order, "refunds": [dict(r) for r in rows]})
             if self.path == "/ledger":
-                with state.connect() as c:
+                with state.db() as c:
                     r = [dict(x) for x in c.execute("SELECT * FROM refunds ORDER BY refund_id")]
                     p = [dict(x) for x in c.execute("SELECT * FROM payments ORDER BY payment_id")]
                 return self._send(200, {"refunds": r, "payments": p})
@@ -84,7 +99,7 @@ def make_handler(state):
                     return self._send(400, {"error": "order_id and positive amount required"})
                 hang = False
                 with state.lock:
-                    with state.connect() as c:
+                    with state.db() as c:
                         if key:
                             row = c.execute("SELECT refund_id, order_id, amount FROM refunds WHERE idempotency_key=?", (key,)).fetchone()
                             if row:
@@ -101,7 +116,7 @@ def make_handler(state):
                 account, amount = data.get("account"), data.get("amount")
                 if not account or not isinstance(amount, (int, float)) or amount <= 0:
                     return self._send(400, {"error": "account and positive amount required"})
-                with state.lock, state.connect() as c:
+                with state.lock, state.db() as c:
                     cur = c.execute("INSERT INTO payments(account, amount, created_at) VALUES (?,?,?)", (str(account), float(amount), time.time()))
                 return self._send(201, {"payment_id": cur.lastrowid, "account": str(account), "amount": float(amount), "status": "sent"})
             self._send(404, {"error": "not found"})
