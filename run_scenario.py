@@ -8,20 +8,36 @@ import shlex
 import sys
 from uuid import uuid4
 
-from agent import TASK, cli_command, run_agent
+from agent import TASK, cli_command, run_agent as run_agent_openai
 from tracing import Telemetry
 
 ROOT = Path(__file__).resolve().parent
 REMOTE = '/tmp/fd'
 
 
+def provider():
+    """LLM_PROVIDER=bedrock uses Claude on Amazon Bedrock; anything else uses the OpenAI-compatible agent."""
+    return os.environ.get('LLM_PROVIDER', 'openai').lower()
+
+
+def run_agent(sb_exec, guardrail, telemetry):
+    if provider() == 'bedrock':
+        from agent_bedrock import run_agent as run_bedrock
+        return run_bedrock(sb_exec, guardrail, telemetry)
+    return run_agent_openai(sb_exec, guardrail, telemetry)
+
+
 def require_environment():
-    names = ('DAYTONA_API_KEY', 'LLM_API_KEY', 'LLM_BASE_URL', 'LLM_MODEL',
-             'ARIZE_API_KEY', 'ARIZE_SPACE_ID')
+    if provider() == 'bedrock':
+        names = ('DAYTONA_API_KEY', 'LLM_MODEL', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY',
+                 'ARIZE_API_KEY', 'ARIZE_SPACE_ID')
+    else:
+        names = ('DAYTONA_API_KEY', 'LLM_API_KEY', 'LLM_BASE_URL', 'LLM_MODEL',
+                 'ARIZE_API_KEY', 'ARIZE_SPACE_ID')
     missing = [n for n in names if not os.environ.get(n)]
     if missing:
         raise ValueError('Missing environment variables: ' + ', '.join(missing))
-    if not os.environ['LLM_BASE_URL'].startswith('https://'):
+    if provider() != 'bedrock' and not os.environ['LLM_BASE_URL'].startswith('https://'):
         raise ValueError('LLM_BASE_URL must use HTTPS')
 
 
@@ -111,7 +127,7 @@ def run_once(guardrail, telemetry, policy='llm', comparison_id=None):
     with telemetry.span('refund_timeout', 'CHAIN', {'task': TASK, 'guardrail': guardrail}) as span:
         span.set_attribute('metadata', json.dumps({'guardrail': guardrail,
             'comparison_id': comparison_id, 'fault': 'timeout_after_commit',
-            'model': os.environ['LLM_MODEL'], 'policy': policy}))
+            'model': os.environ['LLM_MODEL'], 'provider': provider(), 'policy': policy}))
         with sandbox_session(guardrail) as sb_exec:
             if policy == 'llm':
                 agent_result = run_agent(sb_exec, guardrail, telemetry)
